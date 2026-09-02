@@ -1,0 +1,55 @@
+{
+  "llm": {
+    "provider": "mimo",
+    "model": "mimo-v2.5-pro",
+    "baseUrl": "https://aistudio.xiaomimimo.com/open-apis/bot/chat",
+    "apiKey": "",
+    "temperature": 0.3,
+    "cookies": "",
+    "botId": ""
+  },
+  "workspace": "",
+  "autoApproveCommands": ["ls", "cat", "git status", "git log", "git diff", "git branch", "npm test", "echo", "pwd", "node --version", "npm --version", "type", "dir", "find", "grep", "head", "tail", "wc"],
+  "mqtt": {
+    "brokerUrl": "ws://broker.emqx.io:8083/mqtt",
+    "enabled": true
+  },
+  "proxy": {
+    "enabled": false,
+    "server": "http://127.0.0.1:10808",
+    "useSystemProxy": false,
+    "cmdUseProxy": false
+  },
+  "update": {
+    "enabled": true,
+    "server": "http://10.128.252.145:3008",
+    "username": "admin",
+    "password": "eGFpLXVwZGF0ZS0zMDI2"
+  },
+  "webSearch": {
+    "enabled": true,
+    "defaultEngine": "bing",
+    "maxResults": 10,
+    "minRequestInterval": 2000,
+    "autoFallback": true,
+    "hl": "zh-CN",
+    "gl": "CN"
+  },
+  "webFetch": {
+    "enabled": true,
+    "maxLength": 50000,
+    "timeout": 30000,
+    "noiseSelectors": []
+  },
+  "ocr": {
+    "enabled": true,
+    "serverUrl": "http://10.128.252.145:8500",
+    "username": "admin",
+    "password": "cHBvY3J2NkAxMjIwMXh4",
+    "lang": "ch",
+    "timeout": 120000
+  },
+  "adminServer": {
+    "baseUrl": "http://10.128.252.145:8089"
+  }
+}

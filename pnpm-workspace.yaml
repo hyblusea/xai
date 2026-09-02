@@ -1,0 +1,24 @@
+packages:
+  - 'packages/*'
+# 同时安装 darwin x64/arm64 平台二进制包（node-pty、ripgrep），
+# 供 CI 在 arm64 runner 上交叉打包 Intel Mac 的 x64 DMG
+supportedArchitectures:
+  os:
+    - current
+    - darwin
+  cpu:
+    - current
+    - x64
+    - arm64
+allowBuilds:
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  msgpackr-extract: true
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@expo/cli@56.1.13'
+  - '@expo/package-manager@1.12.1'
+  - '@expo/prebuild-config@56.0.14'
+  - expo-modules-core@56.0.14
+  - expo@56.0.7

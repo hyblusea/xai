@@ -1,0 +1,410 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { readFile } from 'fs/promises';
+import path from 'path';
+import os from 'os';
+import { ReplaceInFileTool } from './replace-in-file.js';
+
+describe('ReplaceInFileTool', () => {
+  let tmpDir: string;
+  let tool: ReplaceInFileTool;
+
+  beforeEach(() => {
+    tmpDir = path.join(os.tmpdir(), `replace-file-test-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+    tool = new ReplaceInFileTool(tmpDir);
+  });
+
+  afterEach(() => {
+    if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  async function readTmpFile(name: string): Promise<string> {
+    return readFile(path.join(tmpDir, name), 'utf-8');
+  }
+
+  function writeTmpFile(name: string, content: string): void {
+    writeFileSync(path.join(tmpDir, name), content, 'utf-8');
+  }
+
+  describe('exact match', () => {
+    it('should replace exact text match', async () => {
+      writeTmpFile('a.txt', 'const x = 1;\nconst y = 2;');
+      const result = await tool.execute({ path: 'a.txt', search: 'const x = 1;', replace: 'const x = 3;' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('a.txt');
+      expect(content).toBe('const x = 3;\nconst y = 2;');
+    });
+
+    it('should replace multi-line exact match', async () => {
+      writeTmpFile('b.ts', 'function hello() {\n  console.log("hi");\n}\n');
+      const result = await tool.execute({
+        path: 'b.ts',
+        search: 'function hello() {\n  console.log("hi");\n}',
+        replace: 'function hello() {\n  console.log("hello");\n}',
+      });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('b.ts');
+      expect(content).toBe('function hello() {\n  console.log("hello");\n}\n');
+    });
+
+    it('should only replace first occurrence by default', async () => {
+      writeTmpFile('c.txt', 'aaa\nbbb\naaa');
+      const result = await tool.execute({ path: 'c.txt', search: 'aaa', replace: 'ccc' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('c.txt');
+      expect(content).toBe('ccc\nbbb\naaa');
+    });
+
+    it('should replace all occurrences when replaceAll is true', async () => {
+      writeTmpFile('d.txt', 'aaa\nbbb\naaa');
+      const result = await tool.execute({ path: 'd.txt', search: 'aaa', replace: 'ccc', replaceAll: true });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('d.txt');
+      expect(content).toBe('ccc\nbbb\nccc');
+    });
+
+    it('should fail when search string not found', async () => {
+      writeTmpFile('e.txt', 'hello world');
+      const result = await tool.execute({ path: 'e.txt', search: 'not found', replace: 'xxx' });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not found');
+    });
+
+    it('should fail when search string is empty', async () => {
+      writeTmpFile('f.txt', 'content');
+      const result = await tool.execute({ path: 'f.txt', search: '', replace: 'xxx' });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('empty');
+    });
+
+    it('should fail when replacement produces identical content', async () => {
+      writeTmpFile('g.txt', 'same');
+      const result = await tool.execute({ path: 'g.txt', search: 'same', replace: 'same' });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('identical');
+    });
+
+    it('should fail for non-existent file', async () => {
+      const result = await tool.execute({ path: 'nonexistent.txt', search: 'x', replace: 'y' });
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not found');
+    });
+  });
+
+  describe('fuzzy match - trimEnd tolerance', () => {
+    it('should match when file has trailing spaces but search does not', async () => {
+      writeTmpFile('fuzzy1.txt', 'const x = 1;   \nconst y = 2;  ');
+      const result = await tool.execute({ path: 'fuzzy1.txt', search: 'const x = 1;\nconst y = 2;', replace: 'const x = 3;\nconst y = 4;' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('fuzzy1.txt');
+      expect(content).toBe('const x = 3;\nconst y = 4;');
+    });
+
+    it('should match when search has trailing spaces but file does not', async () => {
+      writeTmpFile('fuzzy2.txt', 'const x = 1;\nconst y = 2;');
+      const result = await tool.execute({ path: 'fuzzy2.txt', search: 'const x = 1;   \nconst y = 2;  ', replace: 'const x = 3;\nconst y = 4;' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('fuzzy2.txt');
+      expect(content).toBe('const x = 3;\nconst y = 4;');
+    });
+
+    it('should preserve trailing whitespace on unmodified lines', async () => {
+      writeTmpFile('fuzzy3.txt', 'line1   \nline2  \nline3   ');
+      const result = await tool.execute({ path: 'fuzzy3.txt', search: 'line2', replace: 'line2_updated' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('fuzzy3.txt');
+      expect(content).toBe('line1   \nline2_updated\nline3   ');
+    });
+  });
+
+  describe('fuzzy match - indentation handling', () => {
+    it('should not double indentation when search has leading whitespace', async () => {
+      writeTmpFile('indent1.ts', '  const foo = 1;\n  const bar = 2;');
+      const result = await tool.execute({
+        path: 'indent1.ts',
+        search: '  const foo = 1;',
+        replace: '  const foo = 3;',
+      });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('indent1.ts');
+      expect(content).toBe('  const foo = 3;\n  const bar = 2;');
+    });
+
+    it('should auto-adjust replace indentation when search omits indentation', async () => {
+      writeTmpFile('indent2.ts', '    const foo = 1;\n    const bar = 2;');
+      const result = await tool.execute({
+        path: 'indent2.ts',
+        search: 'const foo = 1;',
+        replace: 'const foo = 3;',
+      });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('indent2.ts');
+      expect(content).toBe('    const foo = 3;\n    const bar = 2;');
+    });
+
+    it('should handle mixed indentation in multi-line search/replace', async () => {
+      writeTmpFile('indent3.ts', 'function test() {\n  if (true) {\n    return 1;\n  }\n}');
+      const result = await tool.execute({
+        path: 'indent3.ts',
+        search: '  if (true) {\n    return 1;\n  }',
+        replace: '  if (false) {\n    return 0;\n  }',
+      });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('indent3.ts');
+      expect(content).toBe('function test() {\n  if (false) {\n    return 0;\n  }\n}');
+    });
+
+    it('should handle tab indentation', async () => {
+      writeTmpFile('indent4.ts', '\tconst foo = 1;\n\tconst bar = 2;');
+      const result = await tool.execute({
+        path: 'indent4.ts',
+        search: 'const foo = 1;',
+        replace: 'const foo = 3;',
+      });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('indent4.ts');
+      expect(content).toBe('\tconst foo = 3;\n\tconst bar = 2;');
+    });
+  });
+
+  describe('fuzzy match - leading/trailing blank lines in search', () => {
+    it('should match when search has leading blank line that file does not', async () => {
+      writeTmpFile('blank1.txt', 'line1\nline2\nline3');
+      const result = await tool.execute({
+        path: 'blank1.txt',
+        search: '\nline2\n',
+        replace: 'line2_updated',
+      });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('blank1.txt');
+      expect(content).toBe('line1\nline2_updated\nline3');
+    });
+
+    it('should match when search has trailing blank line that file does not', async () => {
+      writeTmpFile('blank2.txt', 'line1\nline2\nline3');
+      const result = await tool.execute({
+        path: 'blank2.txt',
+        search: 'line2\n',
+        replace: 'line2_updated',
+      });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('blank2.txt');
+      expect(content).toBe('line1\nline2_updated\nline3');
+    });
+
+    it('should match when search has both leading and trailing blank lines', async () => {
+      writeTmpFile('blank3.txt', 'aaa\nbbb\nccc');
+      const result = await tool.execute({
+        path: 'blank3.txt',
+        search: '\nbbb\n',
+        replace: 'bbb_new',
+      });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('blank3.txt');
+      expect(content).toBe('aaa\nbbb_new\nccc');
+    });
+  });
+
+  describe('fuzzy match - replaceAll', () => {
+    it('should replace all fuzzy matches when replaceAll is true', async () => {
+      writeTmpFile('fuzzyall.txt', '  foo  \nbar\n  foo  \nbaz');
+      const result = await tool.execute({
+        path: 'fuzzyall.txt',
+        search: 'foo',
+        replace: 'qux',
+        replaceAll: true,
+      });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('fuzzyall.txt');
+      expect(content).toBe('  qux\nbar\n  qux\nbaz');
+    });
+  });
+
+  describe('edge cases', () => {
+    it('should handle replacing with longer content', async () => {
+      writeTmpFile('edge1.txt', 'short');
+      const result = await tool.execute({ path: 'edge1.txt', search: 'short', replace: 'much longer replacement content' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('edge1.txt');
+      expect(content).toBe('much longer replacement content');
+    });
+
+    it('should handle replacing with empty string (deletion)', async () => {
+      writeTmpFile('edge2.txt', 'keep\nremove\nkeep');
+      const result = await tool.execute({ path: 'edge2.txt', search: 'remove', replace: '' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('edge2.txt');
+      expect(content).toBe('keep\n\nkeep');
+    });
+
+    it('should handle Chinese characters', async () => {
+      writeTmpFile('edge3.txt', '你好世界\n第二行');
+      const result = await tool.execute({ path: 'edge3.txt', search: '你好世界', replace: '你好宇宙' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('edge3.txt');
+      expect(content).toBe('你好宇宙\n第二行');
+    });
+
+    it('should handle special regex-like characters in search', async () => {
+      writeTmpFile('edge4.txt', 'const regex = /\\d+\\.\\d+/;');
+      const result = await tool.execute({ path: 'edge4.txt', search: '/\\d+\\.\\d+/', replace: '/[0-9]+\\.[0-9]+/' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('edge4.txt');
+      expect(content).toBe('const regex = /[0-9]+\\.[0-9]+/;');
+    });
+
+    it('should handle file with only one line', async () => {
+      writeTmpFile('edge5.txt', 'only line');
+      const result = await tool.execute({ path: 'edge5.txt', search: 'only line', replace: 'new line' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('edge5.txt');
+      expect(content).toBe('new line');
+    });
+
+    it('should handle file ending without newline', async () => {
+      writeTmpFile('edge6.txt', 'no trailing newline');
+      const result = await tool.execute({ path: 'edge6.txt', search: 'newline', replace: 'newline!' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('edge6.txt');
+      expect(content).toBe('no trailing newline!');
+    });
+
+    it('should handle file with CRLF line endings', async () => {
+      writeTmpFile('edge7.txt', 'line1\r\nline2\r\nline3');
+      const result = await tool.execute({ path: 'edge7.txt', search: 'line2', replace: 'line2_updated' });
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('edge7.txt');
+      expect(content).toContain('line2_updated');
+    });
+
+    it('should handle absolute path', async () => {
+      const absPath = path.join(tmpDir, 'abs.txt');
+      writeFileSync(absPath, 'hello', 'utf-8');
+      const result = await tool.execute({ path: absPath, search: 'hello', replace: 'world' });
+      expect(result.success).toBe(true);
+    });
+
+    it('should include diff in output', async () => {
+      writeTmpFile('diff.txt', 'old line\nunchanged');
+      const result = await tool.execute({ path: 'diff.txt', search: 'old line', replace: 'new line' });
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('---');
+      expect(result.output).toContain('+++');
+      expect(result.output).toContain('-old line');
+      expect(result.output).toContain('+new line');
+    });
+
+    it('should report line count changes', async () => {
+      writeTmpFile('lines.txt', 'a\nb\nc');
+      const result = await tool.execute({ path: 'lines.txt', search: 'b', replace: 'x\ny' });
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('3 → 4');
+    });
+  });
+
+  describe('real-world scenarios', () => {
+    it('should replace a React useCallback correctly', async () => {
+      writeTmpFile('component.tsx', [
+        'const handleClick = useCallback(async (id: string) => {',
+        '  setLoading(true);',
+        '  const result = await fetchData(id);',
+        '  setData(result);',
+        '  setLoading(false);',
+        '}, [fetchData]);',
+        '',
+        'const handleDelete = useCallback(async (id: string) => {',
+        '  await deleteItem(id);',
+        '}, []);',
+      ].join('\n'));
+
+      const result = await tool.execute({
+        path: 'component.tsx',
+        search: 'const handleClick = useCallback(async (id: string) => {\n  setLoading(true);\n  const result = await fetchData(id);\n  setData(result);\n  setLoading(false);\n}, [fetchData]);',
+        replace: 'const handleClick = useCallback(async (id: string) => {\n  setLoading(true);\n  const result = await fetchData(id);\n  setData(result);\n  showToast("Success");\n  setLoading(false);\n}, [fetchData, showToast]);',
+      });
+
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('component.tsx');
+      expect(content).toContain('showToast("Success")');
+      expect(content).toContain('[fetchData, showToast]');
+      expect(content).toContain('const handleDelete');
+    });
+
+    it('should not produce duplicate closing lines (the original BUG scenario)', async () => {
+      writeTmpFile('bug.ts', [
+        '  const handleCommitFileClick = useCallback(async (hash: string, filePath: string) => {',
+        '    if (onFileOpen) onFileOpen(filePath);',
+        '    if (onGitDiffOpen) onGitDiffOpen(filePath, false);',
+        '  }, [onFileOpen, onGitDiffOpen, setCommitFileDiff]);',
+        '',
+        '  const handleCommitClick = useCallback(async (hash: string) => {',
+      ].join('\n'));
+
+      const result = await tool.execute({
+        path: 'bug.ts',
+        search: '  const handleCommitFileClick = useCallback(async (hash: string, filePath: string) => {\n    if (onFileOpen) onFileOpen(filePath);\n    if (onGitDiffOpen) onGitDiffOpen(filePath, false);\n  }, [onFileOpen, onGitDiffOpen, setCommitFileDiff]);',
+        replace: '  const handleCommitFileClick = useCallback(async (hash: string, filePath: string) => {\n    if (onFileOpen) onFileOpen(filePath);\n    if (onGitDiffOpen) onGitDiffOpen(filePath, false);\n    setCommitFileDiff(null);\n  }, [onFileOpen, onGitDiffOpen, setCommitFileDiff]);',
+      });
+
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('bug.ts');
+      expect(content).toContain('setCommitFileDiff(null)');
+      expect(content).not.toMatch(/\}, \[\]\);/);
+      expect(content).toContain('const handleCommitClick');
+    });
+
+    it('should handle fuzzy match for indented code block', async () => {
+      writeTmpFile('fuzzy-indent.ts', [
+        'class MyClass {',
+        '  constructor() {',
+        '    this.value = 0;',
+        '  }',
+        '',
+        '  getValue() {',
+        '    return this.value;',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const result = await tool.execute({
+        path: 'fuzzy-indent.ts',
+        search: 'getValue() {\n    return this.value;\n  }',
+        replace: 'getValue() {\n    return this.value * 2;\n  }',
+      });
+
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('fuzzy-indent.ts');
+      expect(content).toContain('return this.value * 2;');
+      expect(content).toContain('constructor()');
+      expect(content).toContain('this.value = 0');
+    });
+
+    it('should handle search with extra blank lines around indented code', async () => {
+      writeTmpFile('fuzzy-blank.ts', [
+        'class Foo {',
+        '  method1() {',
+        '    return 1;',
+        '  }',
+        '',
+        '  method2() {',
+        '    return 2;',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const result = await tool.execute({
+        path: 'fuzzy-blank.ts',
+        search: '\n  method2() {\n    return 2;\n  }\n',
+        replace: '  method2() {\n    return 3;\n  }',
+      });
+
+      expect(result.success).toBe(true);
+      const content = await readTmpFile('fuzzy-blank.ts');
+      expect(content).toContain('return 3;');
+      expect(content).toContain('method1');
+    });
+  });
+});

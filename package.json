@@ -1,0 +1,24 @@
+{
+  "name": "xai-ide",
+  "version": "1.2.19",
+  "private": true,
+  "description": "AI Programming Assistant IDE - Based on ReAct + Stream Parsing",
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:shared": "pnpm --filter @xai/shared build",
+    "build:core": "pnpm --filter @xai/core build",
+    "build:electron": "pnpm --filter @xai/electron build",
+    "build:renderer": "pnpm --filter @xai/renderer build",
+    "dev": "pnpm --filter @xai/electron dev",
+    "dev:renderer": "pnpm --filter @xai/renderer dev",
+    "start": "pnpm --filter @xai/electron start",
+    "dist": "pnpm --filter @xai/electron dist"
+  },
+  "dependencies": {
+    "node-sql-parser": "^5.4.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  },
+  "packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72"
+}

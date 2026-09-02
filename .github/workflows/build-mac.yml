@@ -1,0 +1,174 @@
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+# 同一分支多次推送时取消旧的排队/进行中的构建，只跑最新
+concurrency:
+  group: build-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    env:
+      # runner 只有 7GB 内存，防止构建时 JS 堆溢出（exit 134）
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Verify config not sanitized
+        run: |
+          # 检查关键配置未被脱敏（如果内网 IP 被替换成 127.0.0.1 / localhost / 空，
+          # Mac 打包后 fetch 会因服务器不可达而 TypeError: fetch failed）
+          echo "=== Checking config.default.json ==="
+          cat config.default.json
+          if grep -q '"baseUrl".*localhost' config.default.json; then
+            echo "❌ ERROR: config.default.json 的 adminServer.baseUrl 指向 localhost，Mac 用户无法访问！"
+            echo "   请确保内网 IP（如 10.128.252.145）未被脱敏替换。"
+            exit 1
+          fi
+          if ! grep -q 'adminServer' config.default.json; then
+            echo "⚠️  WARNING: config.default.json 缺少 adminServer 配置，将使用 EMBEDDED_DEFAULTS 兜底"
+          fi
+          echo "=== Checking EMBEDDED_DEFAULTS in config.ts ==="
+          # 只检查 EMBEDDED_DEFAULTS 对象里的 adminServer.baseUrl，
+          # 不检查 migrateConfig 里的字符串比较（那是用来检测并修正旧配置的）
+          if grep -n "baseUrl.*localhost" packages/electron/src/config.ts | grep -v "migrateConfig\|===\|旧版\|脱敏"; then
+            echo "❌ ERROR: config.ts 的 adminServer.baseUrl 指向 localhost，Mac 用户无法访问！"
+            exit 1
+          fi
+          # 提取 EMBEDDED_DEFAULTS 中 adminServer 段的 baseUrl 值
+          ADMIN_BASEURL=$(sed -n '/EMBEDDED_DEFAULTS/,/^};/p' packages/electron/src/config.ts | grep -A1 'adminServer' | grep 'baseUrl' | head -1)
+          echo "  EMBEDDED_DEFAULTS adminServer: $ADMIN_BASEURL"
+          if echo "$ADMIN_BASEURL" | grep -q "127\.0\.0\.1\|localhost"; then
+            echo "❌ ERROR: EMBEDDED_DEFAULTS 的 adminServer.baseUrl 指向 127.0.0.1/localhost，Mac 用户无法访问！"
+            exit 1
+          fi
+          echo "✅ Config verification passed"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 分包构建：失败时步骤名直接指明是哪个包，无需登录看日志
+      - name: Build shared
+        run: pnpm --filter @xai/shared build
+
+      - name: Build core
+        run: pnpm --filter @xai/core build
+
+      - name: Build renderer
+        run: pnpm --filter @xai/renderer build
+
+      - name: Build electron
+        run: pnpm --filter @xai/electron build
+
+      # 兜底：确保 darwin 双架构平台包（node-pty / ripgrep 二进制）出现在
+      # electron 包的 node_modules 里，electron-builder 才能收进 app。
+      # 正常情况下 pnpm supportedArchitectures（pnpm-workspace.yaml）已链接；
+      # 若 pnpm 行为不符预期则从 .pnpm store 拷贝（os/cpu 元数据齐全，
+      # electron-builder 会按目标架构自动保留 x64 / 剔除 arm64）。
+      - name: Ensure darwin platform binaries linked
+        run: |
+          cd packages/electron/node_modules
+          mkdir -p @lydell @vscode
+          if [ ! -d @lydell/node-pty-darwin-x64 ]; then
+            cp -R "$PWD/../../../node_modules/.pnpm/@lydell+node-pty-darwin-x64@1.2.0-beta.12/node_modules/@lydell/node-pty-darwin-x64" @lydell/
+          fi
+          if [ ! -d @vscode/ripgrep-darwin-x64 ]; then
+            cp -R "$PWD/../../../node_modules/.pnpm/@vscode+ripgrep-darwin-x64@1.18.0/node_modules/@vscode/ripgrep-darwin-x64" @vscode/
+          fi
+          ls @lydell @vscode
+
+      # 注意：不能用 `run dist -- --mac --x64` 传参——pnpm 会把 `--` 原样
+      # 透传给 electron-builder，commander 会吞掉 -- 之后的所有 flag，
+      # 导致 --x64 静默失效（实测构建仍是 runner 默认的 arm64）。
+      # 因此架构参数内联在 dist:mac-x64 / dist:mac-arm64 专用 script 里。
+      - name: Package macOS DMG (Intel x64)
+        # --publish never: CI 上禁止 electron-builder 向 publish.url 上传产物
+        # CSC_IDENTITY_AUTO_DISCOVERY=false: 无签名证书时跳过 codesign，避免 CI 失败
+        run: pnpm --filter @xai/electron run dist:mac-x64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Package macOS DMG (Apple Silicon arm64)
+        run: pnpm --filter @xai/electron run dist:mac-arm64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Verify asar contains critical packages
+        run: |
+          echo "=== Verifying asar packages ==="
+          node -e "
+          const fs = require('fs');
+          const path = require('path');
+          const releaseDir = path.resolve('release');
+          const asarPath = fs.existsSync(path.join(releaseDir, 'mac-arm64', 'XAI IDE.app', 'Contents', 'Resources', 'app.asar'))
+            ? path.join(releaseDir, 'mac-arm64', 'XAI IDE.app', 'Contents', 'Resources', 'app.asar')
+            : path.join(releaseDir, 'mac', 'XAI IDE.app', 'Contents', 'Resources', 'app.asar');
+          if (!fs.existsSync(asarPath)) {
+            console.log('⚠️  app.asar not found at expected paths, skipping verification');
+            process.exit(0);
+          }
+          const fd = fs.openSync(asarPath, 'r');
+          const sizeBuf = Buffer.alloc(8);
+          fs.readSync(fd, sizeBuf, 0, 8, 0);
+          const headerSize = sizeBuf.readUInt32LE(4);
+          const headerBuf = Buffer.alloc(headerSize);
+          fs.readSync(fd, headerBuf, 0, headerSize, 8);
+          const jsonLen = headerBuf.readUInt32LE(4);
+          const header = JSON.parse(headerBuf.slice(8, 8 + jsonLen).toString('utf8'));
+          fs.closeSync(fd);
+          function find(segs) {
+            let n = { files: header.files };
+            for (const s of segs) { if (!n?.files?.[s]) return false; n = n.files[s]; }
+            return true;
+          }
+          const checks = [
+            ['node_modules', 'undici', 'package.json'],
+            ['node_modules', 'mqtt', 'package.json'],
+          ];
+          let ok = true;
+          for (const segs of checks) {
+            const name = segs[1];
+            if (find(segs)) { console.log('✅ ' + name + ' found in asar'); }
+            else { console.error('❌ ' + name + ' MISSING from asar'); ok = false; }
+          }
+          if (!ok) { console.error('❌ Critical packages missing — app will crash on Mac!'); process.exit(1); }
+          console.log('✅ All critical packages verified');
+          "
+
+      - name: Upload DMG artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xai-ide-macos
+          path: |
+            release/*.dmg
+          retention-days: 30
+          if-no-files-found: error
+
+      # Release 资产支持匿名下载，便于脚本直接拉取 DMG
+      - name: Publish prerelease with DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete mac-latest --cleanup-tag -y || true
+          gh release create mac-latest release/*.dmg \
+            --prerelease \
+            --title "XAI IDE macOS (latest build)" \
+            --notes "Auto build from ${{ github.sha }}"

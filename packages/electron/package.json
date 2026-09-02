@@ -1,0 +1,108 @@
+{
+  "name": "@xai/electron",
+  "version": "1.2.19",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node scripts/sync-version.js && tsup",
+    "dev": "node scripts/dev.js",
+    "start": "electron dist/main.js",
+    "test:captcha": "electron dist/test-captcha.js",
+    "pack": "node scripts/sync-version.js && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ WIN_CODE_SIGN_MIRROR=https://npmmirror.com/mirrors/win-code-sign/ NSIS_MIRROR=https://npmmirror.com/mirrors/nsis/ NSIS_RESOURCES_MIRROR=https://npmmirror.com/mirrors/nsis-resources/ electron-builder --dir",
+    "dist": "node scripts/sync-version.js && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ WIN_CODE_SIGN_MIRROR=https://npmmirror.com/mirrors/win-code-sign/ NSIS_MIRROR=https://npmmirror.com/mirrors/nsis/ NSIS_RESOURCES_MIRROR=https://npmmirror.com/mirrors/nsis-resources/ electron-builder",
+    "dist:mac-x64": "node scripts/sync-version.js && node scripts/electron-builder-mac.cjs --mac --x64 --publish never",
+    "dist:mac-arm64": "node scripts/sync-version.js && node scripts/electron-builder-mac.cjs --mac --arm64 --publish never",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "description": "XAI IDE - AI Programming Assistant",
+  "author": "XAI Team",
+  "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.12",
+    "@xai/core": "workspace:*",
+    "@xai/shared": "workspace:*",
+    "cheerio": "^1.0.0",
+    "markdown-table": "^3.0.4",
+    "mammoth": "^1.12.0",
+    "mqtt": "^5.15.1",
+    "pdfjs-dist": "^6.0.227",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
+    "typescript-language-server": "^5.3.0",
+    "undici": "^7.0.0",
+    "vscode-languageserver-protocol": "^3.18.2",
+    "@vscode/ripgrep": "^1.18.0",
+    "xlsx": "^0.18.5"
+  },
+  "optionalDependencies": {
+    "@lydell/node-pty-win32-x64": "1.2.0-beta.12",
+    "https-proxy-agent": "^7.0.0",
+    "socks-proxy-agent": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "cross-env": "^10.1.0",
+    "electron": "^42.3.0",
+    "electron-builder": "^26.8.1",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.3"
+  },
+  "build": {
+    "appId": "com.xai.ide",
+    "productName": "XAI IDE",
+    "directories": {
+      "output": "../../release"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../config.default.json",
+        "to": "config.default.json"
+      }
+    ],
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "XAI IDE"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools",
+      "icon": "public/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "public/icon.png"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node",
+      "**/prebuilds/**/*",
+      "node_modules/@lydell/**/*"
+    ],
+    "publish": {
+      "provider": "generic",
+      "url": "http://10.128.252.145:3008/"
+    }
+  }
+}
